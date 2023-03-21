@@ -2,7 +2,10 @@
 
 namespace ViteHelper\Vite;
 
+use PharIo\Manifest\Requirement;
+use SilverStripe\Control\Director;
 use SilverStripe\Core\Config\Configurable;
+use SilverStripe\View\Requirements;
 use SilverStripe\View\ViewableData;
 
 /**
@@ -34,45 +37,52 @@ class ViteHelper extends ViewableData
     /**
      * Disable dev scripts and serve the production files.
      */
-    private bool $forceProductionMode;
-
-    /**
-     * Used in isDev() as a needle to test $_SERVER['HTTP_HOST'] if the site is running locally / in dev mode.
-     * Set it to e.g. ".test", ".dev", "localhost" etc. to distinguish it from a live server environment.
-     */
-    private string $devHostNeedle;
+    private static bool $force_production_mode = false;
 
     /**
      * Port where the ViteJS dev server will serve
      */
-    private int $devPort;
+    private static int $dev_port = 5173;
 
     /**
      * Source directory for .js/.ts/.vue/.scss etc.
      */
-    private string $jsSrcDirectory;
+    private static string $js_src_directory = 'client/src';
 
     /**
      * Main js / ts file.
      */
-    private string $mainJS;
+    private static string $main_js = 'main.js';
 
     /**
      * Relative path (from /public) to the manifest.json created by ViteJS after running the build command.
      */
-    private string $manifestDir;
+    private static string $manifest_path = '/app/client/dist/manifest.json';
 
-    public function __construct()
+    public function initVite()
     {
-        parent::__construct();
-        $config = self::config();
+        // echo '<pre>';
+        // print_r($this->isDev() ? 'is dev' : 'not dev');
+        // echo '</pre>';
+        // exit();
+        // if ($this->isDev()) {
 
-        $this->forceProductionMode = (bool)$config->forceProductionMode;
-        $this->devHostNeedle = $config->devHostNeedle ?? '.test';
-        $this->devPort = $config->devPort ?? 3000;
-        $this->jsSrcDirectory = $config->jsSrcDirectory ?? 'public_src/';
-        $this->mainJS = $config->mainJS ?? 'main.js';
-        $this->manifestDir = $config->manifestDir ?? '/public/manifest.json';
+        // }
+
+        Requirements::insertHeadTags($this->getHeaderTags(), 'vite_head');
+        Requirements::insertHeadTags($this->getBodyTags(), 'vite_body');
+        
+
+        echo '<pre>';
+        print_r($this->getManifest());
+        print_r("\n\getHeaderTags\n");
+        print_r($this->getHeaderTags());
+        print_r("\n\ngetBodyTags\n");
+        print_r($this->getBodyTags());
+        echo '</pre>';
+        exit();
+
+        
     }
 
     /**
@@ -135,16 +145,16 @@ class ViteHelper extends ViewableData
         $script_tags = [];
         foreach ($manifest as $item) {
 
-            if (!empty($item->isEntry)) {
+            if (!empty($item['isEntry'])) {
 
                 $params = [];
-                if (strpos($item->src, 'legacy') !== false) {
+                if (strpos($item['src'], 'legacy') !== false) {
                     $params[] = 'nomodule';
                 } else {
                     $params['type'] = 'module';
                 }
 
-                $script_tags[] = $this->script($item->file, $params);
+                $script_tags[] = $this->script($item['file'], $params);
             }
         }
 
@@ -170,7 +180,8 @@ class ViteHelper extends ViewableData
      */
     public function getDevScript(): string
     {
-        return $this->script('http://localhost:' . $this->devPort . '/@vite/client', [
+        $port = self::config()->get('dev_port');
+        return $this->script("http://localhost:{$port}/@vite/client", [
             'type' => 'module',
         ]);
     }
@@ -180,7 +191,10 @@ class ViteHelper extends ViewableData
      */
     public function getClientScript(): string
     {
-        return $this->script('http://localhost:' . $this->devPort . '/' . $this->jsSrcDirectory . $this->mainJS, [
+        $port = self::config()->get('dev_port');
+        $dir = self::config()->get('js_src_directory');
+        $script = self::config()->get('main_js');
+        return $this->script("http://localhost:{$port}/{$dir}/{$script}", [
             'type' => 'module',
         ]);
     }
@@ -189,24 +203,22 @@ class ViteHelper extends ViewableData
      * Get data on the files created by ViteJS
      * from /public/manifest.json
      */
-    private function getManifest(): ?\stdClass
+    private function getManifest(): ?array
     {
-        $root = $_SERVER['DOCUMENT_ROOT'] ?? '';
-        $root = str_replace('public', '', $root);
-        $root = rtrim($root, '/');
+        // TODO: add cache
+        $root = Director::baseFolder();
         if (!$root) {
             return null;
         }
 
-        $path = $root . $this->manifestDir;
+        $path = $root . self::config()->get('manifest_path');
 
         if (!file_exists($path)) {
             throw new \Exception('Could not find manifest.json at ' . $path);
         }
 
         $manifest = file_get_contents($path);
-        $manifest = utf8_encode($manifest);
-
+        $manifest = mb_convert_encoding($manifest, 'utf8');
         if (!$manifest) {
             throw new \Exception('No ViteDataExtension manifest.json found. ');
         }
@@ -215,32 +227,23 @@ class ViteHelper extends ViewableData
             "\u0000",
         ], '', $manifest);
 
-        return json_decode($manifest);
+        return json_decode($manifest, true);
     }
 
     /**
      * Decide what files to serve.
-     *
-     * If forceProductionMode is set to true or a ?vprod URL-param is set, it will always return false.
+     * If forceProductionMode is set to true or when in dev mode
+     * @todo check if we can detect vite dev is active
      */
     private function isDev(): bool
     {
-        if ($this->forceProductionMode === true) {
-
+        if (self::config()->get('force_production_mode') === true) {
             return false;
         }
 
-        if (isset($_GET['vprod'])) {
+        return false;
 
-            return false;
-        }
-
-        if (!empty($_COOKIE['vprod']) && $_COOKIE['vprod']) {
-
-            return false;
-        }
-
-        return strpos($_SERVER['HTTP_HOST'] ?? '', $this->devHostNeedle) !== false;
+        return Director::isDev();
     }
 
     private function css(string $url): string
